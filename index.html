@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>Search Visualizer</title>
+<style>
+  :root {
+    --bg: #eef2f6;
+    --panel: #dbe4ee;
+    --border: #9fb0c3;
+    --text: #1f2937;
+    --accent: #2563eb;
+    --edge: #b9c4d0;
+    --node: #374151;
+    --frontier: #f59e0b;
+    --current: #facc15;
+    --visited: #60a5fa;
+    --start: #16a34a;
+    --goal: #dc2626;
+    --path: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  #toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  #toolbar button, #toolbar select, #toolbar input {
+    font-size: 13px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: #fff;
+    cursor: pointer;
+  }
+  #toolbar button.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  #toolbar label {
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: 6px;
+  }
+  #main {
+    display: flex;
+  }
+  #stats {
+    width: 220px;
+    padding: 14px;
+    line-height: 1.9;
+    font-size: 14px;
+    border-right: 1px solid var(--border);
+    background: var(--panel);
+    min-height: calc(100vh - 53px);
+  }
+  #stats div span.label { color: #4b5563; }
+  #stats div span.val { font-weight: 600; }
+  #canvasWrap { flex: 1; overflow: auto; }
+  svg { width: 100%; height: calc(100vh - 53px); display: block; background: #eef2f6; }
+  .edge { stroke: var(--edge); stroke-width: 2; }
+  .edge.path { stroke: var(--path); stroke-width: 5; }
+  .node { fill: var(--node); stroke: #fff; stroke-width: 1.5; cursor: pointer; }
+  .node.frontier { fill: var(--frontier); }
+  .node.current { fill: var(--current); stroke: #92400e; }
+  .node.visited { fill: var(--visited); }
+  .node.start { fill: var(--start); r: 11; }
+  .node.goal { fill: var(--goal); r: 11; }
+  .nodeLabel { font-size: 12px; font-weight: 700; fill: #fff; pointer-events: none; text-anchor: middle; }
+  .hLabel { font-size: 10px; fill: #6b7280; text-anchor: middle; pointer-events: none; }
+  #hint { font-size: 12px; color: #4b5563; margin-left: auto; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <label>Type
+    <select id="algoType">
+      <option value="dfs">Depth-first</option>
+      <option value="bfs">Breadth-first</option>
+      <option value="british">British Museum</option>
+      <option value="beam" selected>Beam search</option>
+      <option value="hillclimbing">Hill climbing</option>
+    </select>
+  </label>
+  <label id="beamWidthWrap">Beam width
+    <input id="beamWidth" type="number" min="1" max="10" value="2" style="width:48px">
+  </label>
+  <label id="filterWrap"><input id="filterChk" type="checkbox" checked> extended-list filtering</label>
+  <label>Speed
+    <select id="speed">
+      <option value="700">slow</option>
+      <option value="350" selected>normal</option>
+      <option value="120">fast</option>
+    </select>
+  </label>
+  <button id="btnSetStart">Set start</button>
+  <button id="btnSetGoal">Set goal</button>
+  <button id="btnSearch">Search</button>
+  <button id="btnPause">Pause</button>
+  <button id="btnStop">Stop</button>
+  <button id="btnNewGraph">New graph</button>
+  <span id="hint">click "Set start"/"Set goal" then click a node</span>
+</div>
+
+<div id="main">
+  <div id="stats">
+    <div><span class="label">Type:</span> <span class="val" id="statType">beam</span></div>
+    <div><span class="label">Enqueuings:</span> <span class="val" id="statEnq">0</span></div>
+    <div><span class="label">Extensions:</span> <span class="val" id="statExt">0</span></div>
+    <div><span class="label">Queue size:</span> <span class="val" id="statQ">0</span></div>
+    <div><span class="label">Path elements:</span> <span class="val" id="statPathN">0</span></div>
+    <div><span class="label">Path length:</span> <span class="val" id="statPathLen">0.0</span> km</div>
+    <div style="margin-top:10px;color:#4b5563" id="statMsg"></div>
+    <div style="margin-top:14px;font-size:12px;color:#4b5563">
+      회색 숫자 = h(n): goal까지 남은 추정 거리<br>(작을수록 좋음)
+    </div>
+  </div>
+  <div id="canvasWrap">
+    <svg id="svg" viewBox="0 0 1000 650" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<script>
+const W = 1000, H = 650;
+const svg = document.getElementById('svg');
+
+function mulberry32(seed) {
+  return function() {
+    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let rngSeed = 42;
+let nodes = [], edges = [], adj = {}, startId = null, goalId = null;
+
+function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function buildGraph() {
+  const rand = mulberry32(rngSeed);
+  rngSeed += 1;
+  nodes = [];
+  const cols = 6, rows = 4;
+  const marginX = 90, marginY = 90;
+  const cellW = (W - 2 * marginX) / (cols - 1);
+  const cellH = (H - 2 * marginY) / (rows - 1);
+  let id = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const jx = (rand() - 0.5) * cellW * 0.6;
+      const jy = (rand() - 0.5) * cellH * 0.6;
+      nodes.push({ id: id++, x: marginX + c * cellW + jx, y: marginY + r * cellH + jy });
+    }
+  }
+
+  adj = {}; nodes.forEach(n => adj[n.id] = []);
+  const edgeSet = new Set();
+  function addEdge(a, b) {
+    const key = a < b ? a + '_' + b : b + '_' + a;
+    if (a === b || edgeSet.has(key)) return;
+    edgeSet.add(key);
+    const cost = dist(nodes[a], nodes[b]) / 100;
+    adj[a].push({ to: b, cost });
+    adj[b].push({ to: a, cost });
+    edges.push({ a, b, cost });
+  }
+
+  edges = [];
+  const k = 3;
+  nodes.forEach(n => {
+    const distances = nodes
+      .filter(m => m.id !== n.id)
+      .map(m => ({ id: m.id, d: dist(n, m) }))
+      .sort((p, q) => p.d - q.d)
+      .slice(0, k);
+    distances.forEach(d => addEdge(n.id, d.id));
+  });
+
+  // ensure connectivity: BFS from node 0, bridge any unreachable components
+  function connectedComponent(startNode) {
+    const seen = new Set([startNode]);
+    const stack = [startNode];
+    while (stack.length) {
+      const cur = stack.pop();
+      adj[cur].forEach(e => { if (!seen.has(e.to)) { seen.add(e.to); stack.push(e.to); } });
+    }
+    return seen;
+  }
+  let reachable = connectedComponent(0);
+  while (reachable.size < nodes.length) {
+    const outside = nodes.filter(n => !reachable.has(n.id));
+    let best = null;
+    outside.forEach(o => {
+      [...reachable].forEach(rId => {
+        const d = dist(o, nodes[rId]);
+        if (!best || d < best.d) best = { o: o.id, r: rId, d };
+      });
+    });
+    addEdge(best.o, best.r);
+    reachable = connectedComponent(0);
+  }
+
+  const sorted = [...nodes].sort((a, b) => a.x - b.x);
+  startId = sorted[0].id;
+  goalId = sorted[sorted.length - 1].id;
+}
+
+function h(id) { return dist(nodes[id], nodes[goalId]) / 100; }
+
+// ---- rendering ----
+let nodeEls = {}, edgeEls = {}, hLabelEls = {};
+
+function renderGraph() {
+  svg.innerHTML = '';
+  edgeEls = {};
+  edges.forEach((e, i) => {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', nodes[e.a].x);
+    line.setAttribute('y1', nodes[e.a].y);
+    line.setAttribute('x2', nodes[e.b].x);
+    line.setAttribute('y2', nodes[e.b].y);
+    line.setAttribute('class', 'edge');
+    svg.appendChild(line);
+    edgeEls[e.a + '_' + e.b] = line;
+    edgeEls[e.b + '_' + e.a] = line;
+  });
+  nodeEls = {};
+  nodes.forEach(n => {
+    const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c.setAttribute('cx', n.x);
+    c.setAttribute('cy', n.y);
+    c.setAttribute('r', 7);
+    c.setAttribute('class', 'node');
+    c.addEventListener('click', () => onNodeClick(n.id));
+    const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent = 'node ' + n.id;
+    c.appendChild(title);
+    svg.appendChild(c);
+    nodeEls[n.id] = c;
+  });
+  renderHeuristicLabels();
+  refreshMarkers();
+}
+
+function renderHeuristicLabels() {
+  hLabelEls = {};
+  nodes.forEach(n => {
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', n.x);
+    t.setAttribute('y', n.y - 12);
+    t.setAttribute('class', 'hLabel');
+    svg.appendChild(t);
+    hLabelEls[n.id] = t;
+  });
+  updateHeuristicLabels();
+}
+
+function updateHeuristicLabels() {
+  nodes.forEach(n => { if (hLabelEls[n.id]) hLabelEls[n.id].textContent = h(n.id).toFixed(1); });
+}
+
+function refreshMarkers() {
+  nodes.forEach(n => {
+    const el = nodeEls[n.id];
+    el.setAttribute('class', 'node');
+    if (svg.querySelector('#lbl' + n.id)) svg.querySelector('#lbl' + n.id).remove();
+  });
+  updateHeuristicLabels();
+  [{ id: startId, cls: 'start', label: 'S' }, { id: goalId, cls: 'goal', label: 'G' }].forEach(m => {
+    const n = nodes[m.id];
+    nodeEls[m.id].classList.add(m.cls);
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('id', 'lbl' + m.id);
+    t.setAttribute('x', n.x);
+    t.setAttribute('y', n.y + 4);
+    t.setAttribute('class', 'nodeLabel');
+    t.textContent = m.label;
+    svg.appendChild(t);
+  });
+}
+
+// ---- interaction: set start / goal ----
+let pendingMode = null;
+
+document.getElementById('btnSetStart').onclick = () => setMode('start');
+document.getElementById('btnSetGoal').onclick = () => setMode('goal');
+
+function setMode(mode) {
+  pendingMode = mode;
+  document.getElementById('btnSetStart').classList.toggle('active', mode === 'start');
+  document.getElementById('btnSetGoal').classList.toggle('active', mode === 'goal');
+}
+
+function onNodeClick(id) {
+  if (!pendingMode) return;
+  if (pendingMode === 'start') startId = id;
+  else goalId = id;
+  pendingMode = null;
+  document.getElementById('btnSetStart').classList.remove('active');
+  document.getElementById('btnSetGoal').classList.remove('active');
+  resetSearchVisuals();
+  refreshMarkers();
+}
+
+// ---- search state machine ----
+let search = null;
+
+const TYPE_LABELS = {
+  dfs: 'depth-first', bfs: 'breadth-first',
+  british: 'British Museum', beam: 'beam', hillclimbing: 'hill climbing'
+};
+
+function typeStatText() {
+  const type = document.getElementById('algoType').value;
+  if (type === 'british') return `${TYPE_LABELS[type]} (exhaustive, no filtering)`;
+  const filtering = document.getElementById('filterChk').checked;
+  return `${TYPE_LABELS[type]}, with${filtering ? '' : ' no'} extended list filtering`;
+}
+
+function freshSearch() {
+  const type = document.getElementById('algoType').value;
+  const beamWidth = type === 'hillclimbing' ? 1 : parseInt(document.getElementById('beamWidth').value, 10);
+  const filtering = document.getElementById('filterChk').checked;
+  const isBritish = type === 'british';
+  return {
+    type, beamWidth, filtering,
+    frontier: isBritish ? [{ path: [startId], g: 0 }] : [{ id: startId, parent: null, g: 0 }],
+    extended: new Set(),
+    parentOf: {}, gOf: { [startId]: 0 },
+    bestPath: null, bestCost: Infinity,
+    enqueue: 1, extension: 0, ticks: 0, stepCap: nodes.length * (isBritish ? 400 : 50),
+    finished: false, success: false, cappedOut: false,
+    path: [], timer: null, phase: 'search'
+  };
+}
+
+function resetSearchVisuals() {
+  if (search && search.timer) clearInterval(search.timer);
+  search = null;
+  document.getElementById('btnPause').textContent = 'Pause';
+  edges.forEach(e => edgeEls[e.a + '_' + e.b].setAttribute('class', 'edge'));
+  nodes.forEach(n => { if (n.id !== startId && n.id !== goalId) nodeEls[n.id].setAttribute('class', 'node'); });
+  refreshMarkers();
+  setStat('statType', typeStatText());
+  setStat('statEnq', 0); setStat('statExt', 0); setStat('statQ', 0);
+  setStat('statPathN', 0); setStat('statPathLen', '0.0');
+  document.getElementById('statMsg').textContent = '';
+}
+
+function setStat(id, val) { document.getElementById(id).textContent = val; }
+
+function paintFrontierAndVisited() {
+  nodes.forEach(n => {
+    if (n.id === startId || n.id === goalId) return;
+    nodeEls[n.id].setAttribute('class', 'node');
+  });
+  search.extended.forEach(id => {
+    if (id !== startId && id !== goalId) nodeEls[id].classList.add('visited');
+  });
+  const frontierIds = search.type === 'british'
+    ? search.frontier.map(f => f.path[f.path.length - 1])
+    : search.frontier.map(f => f.id);
+  frontierIds.forEach(id => {
+    if (id !== startId && id !== goalId) nodeEls[id].classList.add('frontier');
+  });
+}
+
+function stepDfsBfs() {
+  if (search.frontier.length === 0) { search.finished = true; search.success = false; return; }
+  const current = search.type === 'dfs'
+    ? search.frontier.pop()   // LIFO: most recently discovered first
+    : search.frontier.shift(); // FIFO: oldest discovered first
+  if (search.filtering && search.extended.has(current.id)) return; // skip stale, try again next tick
+  search.extension++;
+  search.extended.add(current.id);
+  if (nodeEls[current.id]) { nodeEls[current.id].setAttribute('class', current.id === goalId ? 'node goal' : 'node current'); }
+  if (current.id === goalId) {
+    search.finished = true; search.success = true;
+    buildPath();
+    return;
+  }
+  adj[current.id].forEach(e => {
+    if (search.filtering && search.extended.has(e.to)) return;
+    const g = current.g + e.cost;
+    search.parentOf[e.to] = current.id;
+    search.gOf[e.to] = g;
+    search.frontier.push({ id: e.to, parent: current.id, g });
+    search.enqueue++;
+  });
+}
+
+function stepGenerational() {
+  if (search.frontier.length === 0) { search.finished = true; search.success = false; return; }
+  const hit = search.frontier.find(f => f.id === goalId);
+  search.extension += search.frontier.length;
+  search.frontier.forEach(f => search.extended.add(f.id));
+  if (hit) {
+    search.finished = true; search.success = true;
+    buildPath();
+    return;
+  }
+  const candidatesMap = {};
+  search.frontier.forEach(f => {
+    adj[f.id].forEach(e => {
+      if (search.filtering && search.extended.has(e.to)) return;
+      const g = f.g + e.cost;
+      if (!candidatesMap[e.to] || candidatesMap[e.to].h > h(e.to)) {
+        candidatesMap[e.to] = { id: e.to, parent: f.id, g, h: h(e.to) };
+      }
+      search.enqueue++;
+    });
+  });
+  const candidates = Object.values(candidatesMap).sort((a, b) => a.h - b.h);
+  const nextFrontier = candidates.slice(0, search.beamWidth);
+  nextFrontier.forEach(c => { search.parentOf[c.id] = c.parent; search.gOf[c.id] = c.g; });
+  search.frontier = nextFrontier;
+  if (search.frontier.length === 0) { search.finished = true; search.success = false; }
+}
+
+function stepBritish() {
+  if (search.frontier.length === 0) {
+    search.finished = true;
+    search.success = search.bestPath != null;
+    if (search.success) { search.path = search.bestPath; search.gOf[goalId] = search.bestCost; }
+    return;
+  }
+  const cur = search.frontier.pop(); // exhaustive DFS over every simple path, no pruning
+  search.extension++;
+  const last = cur.path[cur.path.length - 1];
+  search.extended.add(last);
+  if (nodeEls[last]) nodeEls[last].setAttribute('class', last === goalId ? 'node goal' : 'node current');
+  if (last === goalId) {
+    if (cur.g < search.bestCost) {
+      search.bestCost = cur.g; search.bestPath = cur.path.slice();
+      setStat('statPathN', search.bestPath.length - 1);
+      setStat('statPathLen', search.bestCost.toFixed(2) + ' (so far)');
+    }
+    return; // don't expand past goal, but keep exploring other branches
+  }
+  adj[last].forEach(e => {
+    if (cur.path.includes(e.to)) return; // avoid cycles within a single path
+    search.frontier.push({ path: [...cur.path, e.to], g: cur.g + e.cost });
+    search.enqueue++;
+  });
+}
+
+function buildPath() {
+  const path = [goalId];
+  let cur = goalId;
+  while (cur !== startId) {
+    cur = search.parentOf[cur];
+    if (cur === undefined) { path.length = 0; break; }
+    path.push(cur);
+  }
+  path.reverse();
+  search.path = path;
+}
+
+const GENERATIONAL_TYPES = new Set(['beam', 'hillclimbing']);
+
+function tick() {
+  if (!search || search.finished) return;
+  if (search.type === 'british') stepBritish();
+  else if (GENERATIONAL_TYPES.has(search.type)) stepGenerational();
+  else stepDfsBfs();
+  search.ticks++;
+  if (!search.finished && search.ticks > search.stepCap) {
+    search.finished = true; search.cappedOut = true;
+    if (search.type === 'british' && search.bestPath) {
+      search.success = true; search.path = search.bestPath; search.gOf[goalId] = search.bestCost;
+    } else {
+      search.success = false;
+    }
+  }
+  paintFrontierAndVisited();
+  setStat('statEnq', search.enqueue);
+  setStat('statExt', search.extension);
+  setStat('statQ', search.frontier.length);
+  if (search.finished) {
+    clearInterval(search.timer);
+    if (search.success) {
+      setStat('statPathN', search.path.length - 1);
+      setStat('statPathLen', search.gOf[goalId].toFixed(2));
+      document.getElementById('statMsg').textContent = search.cappedOut
+        ? 'budget exceeded — showing best path found so far (not proven optimal)'
+        : 'goal reached';
+      animatePath();
+    } else if (search.cappedOut) {
+      document.getElementById('statMsg').textContent = 'step limit reached — try enabling extended-list filtering (cycle?)';
+    } else {
+      document.getElementById('statMsg').textContent = 'no path found (stuck / exhausted)';
+    }
+  }
+}
+
+function animatePath() {
+  let i = 0;
+  const path = search.path;
+  const speed = parseInt(document.getElementById('speed').value, 10);
+  const timer = setInterval(() => {
+    if (i >= path.length - 1) { clearInterval(timer); return; }
+    const a = path[i], b = path[i + 1];
+    const el = edgeEls[a + '_' + b];
+    if (el) el.setAttribute('class', 'edge path');
+    i++;
+  }, Math.max(80, speed / 2));
+}
+
+document.getElementById('btnSearch').onclick = () => {
+  if (search && search.timer) clearInterval(search.timer);
+  resetSearchVisuals();
+  search = freshSearch();
+  setStat('statType', typeStatText());
+  const speed = parseInt(document.getElementById('speed').value, 10);
+  search.timer = setInterval(tick, speed);
+};
+
+document.getElementById('btnPause').onclick = (e) => {
+  if (!search || search.finished) return;
+  if (search.timer) {
+    clearInterval(search.timer);
+    search.timer = null;
+    e.target.textContent = 'Resume';
+  } else {
+    const speed = parseInt(document.getElementById('speed').value, 10);
+    search.timer = setInterval(tick, speed);
+    e.target.textContent = 'Pause';
+  }
+};
+
+document.getElementById('btnStop').onclick = () => resetSearchVisuals();
+
+document.getElementById('btnNewGraph').onclick = () => {
+  resetSearchVisuals();
+  buildGraph();
+  renderGraph();
+  resetSearchVisuals();
+};
+
+document.getElementById('algoType').onchange = () => {
+  const type = document.getElementById('algoType').value;
+  document.getElementById('beamWidthWrap').style.display = type === 'beam' ? 'flex' : 'none';
+  document.getElementById('filterWrap').style.display = type === 'british' ? 'none' : 'flex';
+  resetSearchVisuals();
+};
+
+document.getElementById('filterChk').onchange = () => resetSearchVisuals();
+
+buildGraph();
+renderGraph();
+resetSearchVisuals();
+</script>
+</body>
+</html>
