@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8">
-<title>Search Visualizer</title>
+<title>탐색 알고리즘 시각화</title>
 <style>
   :root {
     --bg: #eef2f6;
@@ -59,19 +59,22 @@
     display: flex;
   }
   #stats {
-    width: 220px;
+    width: 280px;
     padding: 14px;
     line-height: 1.9;
     font-size: 14px;
     border-right: 1px solid var(--border);
     background: var(--panel);
     min-height: calc(100vh - 53px);
+    word-break: keep-all;
   }
   #stats div span.label { color: #4b5563; }
   #stats div span.val { font-weight: 600; }
   #canvasWrap { flex: 1; overflow: auto; }
   svg { width: 100%; height: calc(100vh - 53px); display: block; background: #eef2f6; }
   .edge { stroke: var(--edge); stroke-width: 2; }
+  .edge.explored { stroke: #93c5fd; stroke-width: 3; }
+  .edge.current { stroke: var(--current); stroke-width: 4; }
   .edge.path { stroke: var(--path); stroke-width: 5; }
   .node { fill: var(--node); stroke: #fff; stroke-width: 1.5; cursor: pointer; }
   .node.frontier { fill: var(--frontier); }
@@ -80,62 +83,130 @@
   .node.start { fill: var(--start); r: 11; }
   .node.goal { fill: var(--goal); r: 11; }
   .nodeLabel { font-size: 12px; font-weight: 700; fill: #fff; pointer-events: none; text-anchor: middle; }
-  .hLabel { font-size: 10px; fill: #6b7280; text-anchor: middle; pointer-events: none; }
+  .edgeLabel {
+    font-size: 10px; fill: #2563eb; text-anchor: middle; pointer-events: none;
+    stroke: var(--bg); stroke-width: 3px; paint-order: stroke fill;
+  }
+  .hLabel {
+    font-size: 10px; fill: #dc2626; font-weight: 700; text-anchor: middle; pointer-events: none;
+    stroke: var(--bg); stroke-width: 3px; paint-order: stroke fill;
+  }
   #hint { font-size: 12px; color: #4b5563; margin-left: auto; }
+  #statMsg { margin-top: 10px; color: #4b5563; }
+  #statMsg.result {
+    font-size: 16px; font-weight: 700; padding: 8px 10px;
+    border-radius: 6px; margin-top: 10px;
+  }
+  #statMsg.success { background: #dcfce7; color: #15803d; }
+  #statMsg.warn { background: #fef3c7; color: #92400e; }
+  #statMsg.fail { background: #fee2e2; color: #b91c1c; }
+  #legend { margin-top: 14px; font-size: 12px; color: #4b5563; }
+  #legend .row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+  #legend .swatch { width: 14px; height: 3px; border-radius: 2px; flex: none; }
+  #legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  #legend .num { width: 26px; font-size: 11px; font-weight: 700; text-align: center; flex: none; }
+  #compareWrap { padding: 16px 20px 32px; border-top: 1px solid var(--border); background: #fff; }
+  #compareCaption { font-size: 13px; color: #4b5563; margin-bottom: 10px; }
+  #compareCaption b { color: var(--text); }
+  #compareCaption .badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%; color: #fff;
+    font-size: 10px; font-weight: 700; margin-right: 2px; vertical-align: middle;
+  }
+  #compareTable { border-collapse: collapse; font-size: 14px; width: 100%; max-width: 860px; }
+  #compareTable th, #compareTable td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; }
+  #compareTable thead th { background: var(--panel); font-weight: 700; }
+  #compareTable td.num, #compareTable th.num { text-align: right; background-repeat: no-repeat; }
+  #compareTable tr.groupRow td { background: #f3f4f6; font-weight: 700; color: #4b5563; font-size: 12px; }
+  #compareTable tr.fail td { color: #b91c1c; }
+  #compareTable tr.warn td { color: #92400e; }
+  #compareTable td.costBest { background: #fef9c3; font-weight: 700; color: #ca8a04; }
+  #compareTable td.extBest { background: #dbeafe; font-weight: 700; color: #1d4ed8; }
 </style>
 </head>
 <body>
 
 <div id="toolbar">
-  <label>Type
+  <label>탐색 방식
     <select id="algoType">
-      <option value="dfs">Depth-first</option>
-      <option value="bfs">Breadth-first</option>
-      <option value="british">British Museum</option>
-      <option value="beam" selected>Beam search</option>
-      <option value="hillclimbing">Hill climbing</option>
+      <optgroup label="비정보 탐색 (Uninformed)">
+        <option value="dfs">Depth-first</option>
+        <option value="bfs">Breadth-first</option>
+        <option value="ucs">Uniform-cost</option>
+      </optgroup>
+      <optgroup label="정보 탐색 (Informed)">
+        <option value="greedy">Greedy Best-First</option>
+        <option value="astar">A*</option>
+        <option value="beam" selected>Beam search</option>
+        <option value="adaptivebeam">Adaptive Beam search</option>
+      </optgroup>
+      <optgroup label="번외">
+        <option value="british">British Museum</option>
+        <option value="hillclimbing">Hill climbing</option>
+      </optgroup>
     </select>
   </label>
-  <label id="beamWidthWrap">Beam width
+  <label id="beamWidthWrap">폭 크기
     <input id="beamWidth" type="number" min="1" max="10" value="2" style="width:48px">
   </label>
-  <label id="filterWrap"><input id="filterChk" type="checkbox" checked> extended-list filtering</label>
-  <label>Speed
+  <label id="deltaWrap" style="display:none">δ (tolerance)
+    <input id="beamDelta" type="number" min="0" max="5" step="0.1" value="1.5" style="width:48px">
+  </label>
+  <label id="filterWrap"><input id="filterChk" type="checkbox" checked> 재확장 여부</label>
+  <label>속도
     <select id="speed">
-      <option value="700">slow</option>
-      <option value="350" selected>normal</option>
-      <option value="120">fast</option>
+      <option value="700">느림</option>
+      <option value="350" selected>보통</option>
+      <option value="120">빠름</option>
     </select>
   </label>
-  <button id="btnSetStart">Set start</button>
-  <button id="btnSetGoal">Set goal</button>
-  <button id="btnSearch">Search</button>
-  <button id="btnPause">Pause</button>
-  <button id="btnStop">Stop</button>
-  <button id="btnNewGraph">New graph</button>
-  <span id="hint">click "Set start"/"Set goal" then click a node</span>
+  <button id="btnSetStart">시작 지정</button>
+  <button id="btnSetGoal">목표 지정</button>
+  <button id="btnSearch">탐색 시작</button>
+  <button id="btnPause">일시정지</button>
+  <button id="btnStop">정지</button>
+  <button id="btnNewGraph">새 그래프</button>
+  <button id="btnCompare">전체 알고리즘 비교</button>
+  <span id="hint">"시작 지정"/"목표 지정" 클릭 후 노드를 클릭하세요</span>
 </div>
 
 <div id="main">
   <div id="stats">
-    <div><span class="label">Type:</span> <span class="val" id="statType">beam</span></div>
-    <div><span class="label">Enqueuings:</span> <span class="val" id="statEnq">0</span></div>
-    <div><span class="label">Extensions:</span> <span class="val" id="statExt">0</span></div>
-    <div><span class="label">Queue size:</span> <span class="val" id="statQ">0</span></div>
-    <div><span class="label">Path elements:</span> <span class="val" id="statPathN">0</span></div>
-    <div><span class="label">Path length:</span> <span class="val" id="statPathLen">0.0</span> km</div>
+    <div><span class="label">탐색 방식:</span> <span class="val" id="statType">beam</span></div>
+    <div><span class="label">탐색 모드:</span> <span class="val" id="statMode">Graph Search</span></div>
+    <div><span class="label">큐에 넣은 횟수:</span> <span class="val" id="statEnq">0</span></div>
+    <div><span class="label">확장한 노드 수:</span> <span class="val" id="statExt">0</span></div>
+    <div><span class="label">현재 대기열 크기:</span> <span class="val" id="statQ">0</span></div>
+    <div><span class="label">경로 아크 수:</span> <span class="val" id="statPathN">0</span></div>
+    <div><span class="label">경로 총비용:</span> <span class="val" id="statPathLen">0.0</span> km</div>
     <div style="margin-top:10px;color:#4b5563" id="statMsg"></div>
-    <div style="margin-top:14px;font-size:12px;color:#4b5563">
-      회색 숫자 = h(n): goal까지 남은 추정 거리<br>(작을수록 좋음)
+    <div id="legend">
+      <div style="font-weight:700;margin-bottom:6px;color:#374151">목표: 시작→목표 경로의 Σc<sub>ij</sub> 최소화</div>
+      <div class="row"><span class="num" style="color:#2563eb">숫자</span> 아크 비용 c<sub>ij</sub></div>
+      <div class="row"><span class="num" style="color:#dc2626">숫자</span> h(s) 추정치 (Greedy/A*만 표시)</div>
+      <div class="row"><span class="dot" style="background:#16a34a"></span> 시작 노드 (S)</div>
+      <div class="row"><span class="dot" style="background:#dc2626"></span> 목표 노드 (G)</div>
+      <div class="row"><span class="dot" style="background:#f59e0b"></span> 대기 중인 후보 (frontier)</div>
+      <div class="row"><span class="dot" style="background:#facc15"></span> 지금 확장 중인 노드</div>
+      <div class="row"><span class="dot" style="background:#60a5fa"></span> 이미 방문한 노드</div>
+      <div class="row"><span class="swatch" style="background:#b9c4d0"></span> 아직 안 본 아크</div>
+      <div class="row"><span class="swatch" style="background:#93c5fd"></span> 시도했다 버려진 경로</div>
+      <div class="row"><span class="swatch" style="background:#facc15"></span> 지금 따라가는 경로</div>
+      <div class="row"><span class="swatch" style="background:#dc2626"></span> 최종 경로</div>
     </div>
   </div>
   <div id="canvasWrap">
     <svg id="svg" viewBox="0 0 1000 650" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="compareWrap" style="display:none">
+      <div id="compareCaption"></div>
+      <table id="compareTable"></table>
+    </div>
   </div>
 </div>
 
 <script>
 const W = 1000, H = 650;
+const STEP_CAP = 1000; // safety limit on search steps (prevents runaway/exhaustive searches from hanging)
 const svg = document.getElementById('svg');
 
 function mulberry32(seed) {
@@ -221,7 +292,11 @@ function buildGraph() {
   goalId = sorted[sorted.length - 1].id;
 }
 
+// straight-line distance to goal, scaled like edge cost — admissible & consistent since
+// edge cost is itself the straight-line distance between its two endpoints
 function h(id) { return dist(nodes[id], nodes[goalId]) / 100; }
+const HEURISTIC_TYPES = new Set(['greedy', 'astar']);
+function usesHeuristic() { return HEURISTIC_TYPES.has(document.getElementById('algoType').value); }
 
 // ---- rendering ----
 let nodeEls = {}, edgeEls = {}, hLabelEls = {};
@@ -240,6 +315,14 @@ function renderGraph() {
     edgeEls[e.a + '_' + e.b] = line;
     edgeEls[e.b + '_' + e.a] = line;
   });
+  edges.forEach(e => {
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', (nodes[e.a].x + nodes[e.b].x) / 2);
+    t.setAttribute('y', (nodes[e.a].y + nodes[e.b].y) / 2);
+    t.setAttribute('class', 'edgeLabel');
+    t.textContent = e.cost.toFixed(1);
+    svg.appendChild(t);
+  });
   nodeEls = {};
   nodes.forEach(n => {
     const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -249,7 +332,7 @@ function renderGraph() {
     c.setAttribute('class', 'node');
     c.addEventListener('click', () => onNodeClick(n.id));
     const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
-    title.textContent = 'node ' + n.id;
+    title.textContent = '노드 ' + n.id;
     c.appendChild(title);
     svg.appendChild(c);
     nodeEls[n.id] = c;
@@ -272,16 +355,22 @@ function renderHeuristicLabels() {
 }
 
 function updateHeuristicLabels() {
-  nodes.forEach(n => { if (hLabelEls[n.id]) hLabelEls[n.id].textContent = h(n.id).toFixed(1); });
+  const show = usesHeuristic();
+  nodes.forEach(n => {
+    const el = hLabelEls[n.id];
+    if (!el) return;
+    el.style.display = show ? '' : 'none';
+    if (show) el.textContent = h(n.id).toFixed(1);
+  });
 }
 
 function refreshMarkers() {
+  updateHeuristicLabels();
   nodes.forEach(n => {
     const el = nodeEls[n.id];
     el.setAttribute('class', 'node');
     if (svg.querySelector('#lbl' + n.id)) svg.querySelector('#lbl' + n.id).remove();
   });
-  updateHeuristicLabels();
   [{ id: startId, cls: 'start', label: 'S' }, { id: goalId, cls: 'goal', label: 'G' }].forEach(m => {
     const n = nodes[m.id];
     nodeEls[m.id].classList.add(m.cls);
@@ -322,48 +411,70 @@ function onNodeClick(id) {
 let search = null;
 
 const TYPE_LABELS = {
-  dfs: 'depth-first', bfs: 'breadth-first',
-  british: 'British Museum', beam: 'beam', hillclimbing: 'hill climbing'
+  dfs: 'depth-first', bfs: 'breadth-first', ucs: 'uniform-cost',
+  greedy: 'greedy best-first', astar: 'A*', beam: 'beam', adaptivebeam: 'adaptive beam',
+  british: 'British Museum', hillclimbing: 'hill climbing'
 };
 
 function typeStatText() {
-  const type = document.getElementById('algoType').value;
-  if (type === 'british') return `${TYPE_LABELS[type]} (exhaustive, no filtering)`;
-  const filtering = document.getElementById('filterChk').checked;
-  return `${TYPE_LABELS[type]}, with${filtering ? '' : ' no'} extended list filtering`;
+  return TYPE_LABELS[document.getElementById('algoType').value];
 }
 
-function freshSearch() {
+function modeStatText() {
   const type = document.getElementById('algoType').value;
+  if (type === 'british') return '전체 탐색 (필터링 없음)';
+  const filtering = document.getElementById('filterChk').checked;
+  return filtering ? 'Graph Search (재확장 안 함)' : 'Tree Search (재확장 허용)';
+}
+
+function freshSearch(typeOverride) {
+  const type = typeOverride || document.getElementById('algoType').value;
   const beamWidth = type === 'hillclimbing' ? 1 : parseInt(document.getElementById('beamWidth').value, 10);
+  const delta = parseFloat(document.getElementById('beamDelta').value);
   const filtering = document.getElementById('filterChk').checked;
   const isBritish = type === 'british';
   return {
-    type, beamWidth, filtering,
-    frontier: isBritish ? [{ path: [startId], g: 0 }] : [{ id: startId, parent: null, g: 0 }],
+    type, beamWidth, delta, filtering,
+    frontier: isBritish ? [{ path: [startId], g: 0 }] : [{ id: startId, path: [startId], g: 0 }],
     extended: new Set(),
-    parentOf: {}, gOf: { [startId]: 0 },
+    exploredEdgeKeys: new Set(), currentEdgeKeys: new Set(),
     bestPath: null, bestCost: Infinity,
-    enqueue: 1, extension: 0, ticks: 0, stepCap: nodes.length * (isBritish ? 400 : 50),
+    enqueue: 1, extension: 0, ticks: 0, stepCap: STEP_CAP,
     finished: false, success: false, cappedOut: false,
-    path: [], timer: null, phase: 'search'
+    path: [], cost: 0, timer: null, phase: 'search'
   };
 }
 
 function resetSearchVisuals() {
   if (search && search.timer) clearInterval(search.timer);
   search = null;
-  document.getElementById('btnPause').textContent = 'Pause';
+  document.getElementById('btnPause').textContent = '일시정지';
   edges.forEach(e => edgeEls[e.a + '_' + e.b].setAttribute('class', 'edge'));
   nodes.forEach(n => { if (n.id !== startId && n.id !== goalId) nodeEls[n.id].setAttribute('class', 'node'); });
   refreshMarkers();
   setStat('statType', typeStatText());
+  setStat('statMode', modeStatText());
   setStat('statEnq', 0); setStat('statExt', 0); setStat('statQ', 0);
   setStat('statPathN', 0); setStat('statPathLen', '0.0');
-  document.getElementById('statMsg').textContent = '';
+  const msgEl = document.getElementById('statMsg');
+  msgEl.textContent = '';
+  msgEl.className = '';
+  document.getElementById('compareWrap').style.display = 'none';
+}
+
+function setResultMsg(text, kind) {
+  const msgEl = document.getElementById('statMsg');
+  msgEl.textContent = text;
+  msgEl.className = 'result ' + kind;
 }
 
 function setStat(id, val) { document.getElementById(id).textContent = val; }
+
+function edgeKeysAlong(path) {
+  const keys = new Set();
+  for (let i = 1; i < path.length; i++) keys.add(path[i - 1] + '_' + path[i]);
+  return keys;
+}
 
 function paintFrontierAndVisited() {
   nodes.forEach(n => {
@@ -381,26 +492,43 @@ function paintFrontierAndVisited() {
   });
 }
 
-function stepDfsBfs() {
+function paintEdges() {
+  edges.forEach(e => {
+    const key = e.a + '_' + e.b, revKey = e.b + '_' + e.a;
+    const cls = ['edge'];
+    if (search.exploredEdgeKeys.has(key) || search.exploredEdgeKeys.has(revKey)) cls.push('explored');
+    if (search.currentEdgeKeys.has(key) || search.currentEdgeKeys.has(revKey)) cls.push('current');
+    edgeEls[key].setAttribute('class', cls.join(' '));
+  });
+}
+
+// dfs: LIFO stack. bfs: FIFO queue. ucs: pop min g(s). greedy: pop min h(s). astar: pop min g(s)+h(s).
+function stepPop() {
   if (search.frontier.length === 0) { search.finished = true; search.success = false; return; }
-  const current = search.type === 'dfs'
-    ? search.frontier.pop()   // LIFO: most recently discovered first
-    : search.frontier.shift(); // FIFO: oldest discovered first
+  let current;
+  if (search.type === 'dfs') current = search.frontier.pop();
+  else if (search.type === 'bfs') current = search.frontier.shift();
+  else {
+    const key = f => search.type === 'ucs' ? f.g
+      : search.type === 'greedy' ? h(f.id)
+      : f.g + h(f.id); // astar: f(s) = g(s) + h(s)
+    search.frontier.sort((a, b) => key(a) - key(b));
+    current = search.frontier.shift();
+  }
   if (search.filtering && search.extended.has(current.id)) return; // skip stale, try again next tick
   search.extension++;
   search.extended.add(current.id);
+  search.currentEdgeKeys = edgeKeysAlong(current.path);
   if (nodeEls[current.id]) { nodeEls[current.id].setAttribute('class', current.id === goalId ? 'node goal' : 'node current'); }
   if (current.id === goalId) {
     search.finished = true; search.success = true;
-    buildPath();
+    search.path = current.path; search.cost = current.g;
     return;
   }
   adj[current.id].forEach(e => {
     if (search.filtering && search.extended.has(e.to)) return;
-    const g = current.g + e.cost;
-    search.parentOf[e.to] = current.id;
-    search.gOf[e.to] = g;
-    search.frontier.push({ id: e.to, parent: current.id, g });
+    search.exploredEdgeKeys.add(current.id + '_' + e.to);
+    search.frontier.push({ id: e.to, path: [...current.path, e.to], g: current.g + e.cost });
     search.enqueue++;
   });
 }
@@ -412,7 +540,7 @@ function stepGenerational() {
   search.frontier.forEach(f => search.extended.add(f.id));
   if (hit) {
     search.finished = true; search.success = true;
-    buildPath();
+    search.path = hit.path; search.cost = hit.g;
     return;
   }
   const candidatesMap = {};
@@ -420,16 +548,31 @@ function stepGenerational() {
     adj[f.id].forEach(e => {
       if (search.filtering && search.extended.has(e.to)) return;
       const g = f.g + e.cost;
-      if (!candidatesMap[e.to] || candidatesMap[e.to].h > h(e.to)) {
-        candidatesMap[e.to] = { id: e.to, parent: f.id, g, h: h(e.to) };
+      if (!candidatesMap[e.to] || candidatesMap[e.to].g > g) {
+        candidatesMap[e.to] = { id: e.to, path: [...f.path, e.to], g };
       }
       search.enqueue++;
     });
   });
-  const candidates = Object.values(candidatesMap).sort((a, b) => a.h - b.h);
-  const nextFrontier = candidates.slice(0, search.beamWidth);
-  nextFrontier.forEach(c => { search.parentOf[c.id] = c.parent; search.gOf[c.id] = c.g; });
+  // rank candidates by cumulative cost g (beam: bounded-width Dijkstra;
+  // hill climbing has beamWidth=1, so a single parent's g-order == its c_ij-order)
+  const candidates = Object.values(candidatesMap).sort((a, b) => a.g - b.g);
+  let nextFrontier;
+  if (candidates.length === 0) {
+    nextFrontier = [];
+  } else if (search.type === 'adaptivebeam') {
+    // keep every candidate with f(s) <= f_min + delta, where f_min is the best score this round
+    const fMin = candidates[0].g;
+    nextFrontier = candidates.filter(c => c.g <= fMin + search.delta);
+  } else {
+    nextFrontier = candidates.slice(0, search.beamWidth); // fixed-width beam / hill climbing
+  }
+  nextFrontier.forEach(c => {
+    search.exploredEdgeKeys.add(c.path[c.path.length - 2] + '_' + c.id);
+  });
   search.frontier = nextFrontier;
+  search.currentEdgeKeys = new Set();
+  nextFrontier.forEach(f => edgeKeysAlong(f.path).forEach(k => search.currentEdgeKeys.add(k)));
   if (search.frontier.length === 0) { search.finished = true; search.success = false; }
 }
 
@@ -437,74 +580,69 @@ function stepBritish() {
   if (search.frontier.length === 0) {
     search.finished = true;
     search.success = search.bestPath != null;
-    if (search.success) { search.path = search.bestPath; search.gOf[goalId] = search.bestCost; }
+    if (search.success) { search.path = search.bestPath; search.cost = search.bestCost; }
     return;
   }
   const cur = search.frontier.pop(); // exhaustive DFS over every simple path, no pruning
   search.extension++;
   const last = cur.path[cur.path.length - 1];
   search.extended.add(last);
+  search.currentEdgeKeys = edgeKeysAlong(cur.path); // spotlight on the branch being examined right now
   if (nodeEls[last]) nodeEls[last].setAttribute('class', last === goalId ? 'node goal' : 'node current');
   if (last === goalId) {
     if (cur.g < search.bestCost) {
       search.bestCost = cur.g; search.bestPath = cur.path.slice();
       setStat('statPathN', search.bestPath.length - 1);
-      setStat('statPathLen', search.bestCost.toFixed(2) + ' (so far)');
+      setStat('statPathLen', search.bestCost.toFixed(2) + ' (탐색 중)');
     }
     return; // don't expand past goal, but keep exploring other branches
   }
   adj[last].forEach(e => {
     if (cur.path.includes(e.to)) return; // avoid cycles within a single path
+    search.exploredEdgeKeys.add(last + '_' + e.to);
     search.frontier.push({ path: [...cur.path, e.to], g: cur.g + e.cost });
     search.enqueue++;
   });
 }
 
-function buildPath() {
-  const path = [goalId];
-  let cur = goalId;
-  while (cur !== startId) {
-    cur = search.parentOf[cur];
-    if (cur === undefined) { path.length = 0; break; }
-    path.push(cur);
-  }
-  path.reverse();
-  search.path = path;
-}
-
-const GENERATIONAL_TYPES = new Set(['beam', 'hillclimbing']);
+const GENERATIONAL_TYPES = new Set(['beam', 'adaptivebeam', 'hillclimbing']);
 
 function tick() {
   if (!search || search.finished) return;
   if (search.type === 'british') stepBritish();
   else if (GENERATIONAL_TYPES.has(search.type)) stepGenerational();
-  else stepDfsBfs();
+  else stepPop();
   search.ticks++;
   if (!search.finished && search.ticks > search.stepCap) {
     search.finished = true; search.cappedOut = true;
     if (search.type === 'british' && search.bestPath) {
-      search.success = true; search.path = search.bestPath; search.gOf[goalId] = search.bestCost;
+      search.success = true; search.path = search.bestPath; search.cost = search.bestCost;
     } else {
       search.success = false;
     }
   }
   paintFrontierAndVisited();
+  paintEdges();
   setStat('statEnq', search.enqueue);
   setStat('statExt', search.extension);
   setStat('statQ', search.frontier.length);
   if (search.finished) {
     clearInterval(search.timer);
+    search.currentEdgeKeys = new Set();
+    paintEdges(); // drop the transient yellow highlight before the final path draws over it
     if (search.success) {
       setStat('statPathN', search.path.length - 1);
-      setStat('statPathLen', search.gOf[goalId].toFixed(2));
-      document.getElementById('statMsg').textContent = search.cappedOut
-        ? 'budget exceeded — showing best path found so far (not proven optimal)'
-        : 'goal reached';
+      setStat('statPathLen', search.cost.toFixed(2));
+      if (search.cappedOut) {
+        setResultMsg('예산 초과 — 지금까지 찾은 최선의 경로 표시 (최적 증명 안 됨)', 'warn');
+      } else {
+        setResultMsg('✓ 목표 도달', 'success');
+      }
       animatePath();
     } else if (search.cappedOut) {
-      document.getElementById('statMsg').textContent = 'step limit reached — try enabling extended-list filtering (cycle?)';
+      setResultMsg('탐색 한도 초과 — "방문 노드 재확장 안 함"을 켜보세요 (순환 구조일 수 있음)', 'fail');
     } else {
-      document.getElementById('statMsg').textContent = 'no path found (stuck / exhausted)';
+      setResultMsg('✗ 경로를 찾지 못함 (막힘 / 탐색 종료)', 'fail');
     }
   }
 }
@@ -522,6 +660,101 @@ function animatePath() {
   }, Math.max(80, speed / 2));
 }
 
+// ---- compare all algorithms on the current graph/start/goal (no animation) ----
+const COMPARE_GROUPS = [
+  { label: '비정보 탐색 (Uninformed)', types: ['dfs', 'bfs', 'ucs'] },
+  { label: '정보 탐색 (Informed)', types: ['greedy', 'astar', 'beam', 'adaptivebeam'] },
+  { label: '번외', types: ['british', 'hillclimbing'] }
+];
+
+function runAlgoToCompletion(type) {
+  search = freshSearch(type);
+  while (!search.finished) {
+    if (search.type === 'british') stepBritish();
+    else if (GENERATIONAL_TYPES.has(search.type)) stepGenerational();
+    else stepPop();
+    search.ticks++;
+    if (!search.finished && search.ticks > search.stepCap) {
+      search.finished = true; search.cappedOut = true;
+      if (search.type === 'british' && search.bestPath) {
+        search.success = true; search.path = search.bestPath; search.cost = search.bestCost;
+      } else {
+        search.success = false;
+      }
+    }
+  }
+  return {
+    type,
+    success: search.success,
+    cappedOut: search.cappedOut,
+    cost: search.success ? search.cost : null,
+    pathN: search.success ? search.path.length - 1 : null,
+    extension: search.extension,
+    enqueue: search.enqueue
+  };
+}
+
+function runCompareAll() {
+  const savedType = document.getElementById('algoType').value;
+  resetSearchVisuals(); // stop any live animation first
+  const allTypes = COMPARE_GROUPS.flatMap(g => g.types);
+  const results = Object.fromEntries(allTypes.map(t => [t, runAlgoToCompletion(t)]));
+  search = null;
+  document.getElementById('algoType').value = savedType;
+  resetSearchVisuals(); // restore a clean, unrun graph
+  renderCompareTable(results);
+}
+
+function renderCompareTable(results) {
+  const all = Object.values(results);
+  const minCost = Math.min(...all.filter(r => r.success).map(r => r.cost));
+  // "verified optimal" excludes British Museum's capped-out (not proven optimal) result,
+  // so the efficiency comparison only runs among runs that actually confirmed the minimum.
+  const optimal = all.filter(r => r.success && !r.cappedOut && Math.abs(r.cost - minCost) < 1e-9);
+  const minExtAmongOptimal = optimal.length ? Math.min(...optimal.map(r => r.extension)) : null;
+
+  const rows = [];
+  COMPARE_GROUPS.forEach(group => {
+    rows.push(`<tr class="groupRow"><td colspan="6">${group.label}</td></tr>`);
+    group.types.forEach(t => {
+      const r = results[t];
+      let rowCls = '';
+      if (!r.success) rowCls = 'fail';
+      else if (r.cappedOut) rowCls = 'warn';
+      const isOptimal = r.success && !r.cappedOut && Math.abs(r.cost - minCost) < 1e-9;
+      const costCls = isOptimal ? 'costBest' : '';
+      const extCls = isOptimal && r.extension === minExtAmongOptimal ? 'extBest' : '';
+      const resultText = !r.success
+        ? (r.cappedOut ? '한도 초과' : '실패')
+        : (r.cappedOut ? '최선(미검증)' : '성공');
+      rows.push(
+        `<tr class="${rowCls}">` +
+        `<td>${TYPE_LABELS[t]}</td>` +
+        `<td>${resultText}</td>` +
+        `<td class="num ${costCls}">${r.success ? r.cost.toFixed(2) : '—'}</td>` +
+        `<td class="num">${r.success ? r.pathN : '—'}</td>` +
+        `<td class="num ${extCls}">${r.extension}</td>` +
+        `<td class="num">${r.enqueue}</td>` +
+        `</tr>`
+      );
+    });
+  });
+  document.getElementById('compareTable').innerHTML =
+    '<thead><tr><th>알고리즘</th><th>결과</th><th class="num">경로 총비용</th>' +
+    '<th class="num">경로 아크 수</th><th class="num">확장 수</th><th class="num">큐에 넣은 횟수</th></tr></thead>' +
+    '<tbody>' + rows.join('') + '</tbody>';
+  const filtering = document.getElementById('filterChk').checked;
+  const modeNote = filtering ? 'Graph Search (재확장 안 함)' : 'Tree Search (재확장 허용)';
+  document.getElementById('compareCaption').innerHTML =
+    `<span class="badge" style="background:#16a34a">S</span>노드 ${startId} → ` +
+    `<span class="badge" style="background:#dc2626">G</span>노드 ${goalId} · ` +
+    `<b>${modeNote}</b> · ` +
+    `<span style="color:#eab308;font-weight:700">노랑</span> = 최소 비용 · ` +
+    `<span style="color:#1d4ed8;font-weight:700">파랑</span> = 최소 확장(효율적)`;
+  document.getElementById('compareWrap').style.display = 'block';
+  document.getElementById('compareWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 document.getElementById('btnSearch').onclick = () => {
   if (search && search.timer) clearInterval(search.timer);
   resetSearchVisuals();
@@ -536,11 +769,11 @@ document.getElementById('btnPause').onclick = (e) => {
   if (search.timer) {
     clearInterval(search.timer);
     search.timer = null;
-    e.target.textContent = 'Resume';
+    e.target.textContent = '이어하기';
   } else {
     const speed = parseInt(document.getElementById('speed').value, 10);
     search.timer = setInterval(tick, speed);
-    e.target.textContent = 'Pause';
+    e.target.textContent = '일시정지';
   }
 };
 
@@ -553,12 +786,18 @@ document.getElementById('btnNewGraph').onclick = () => {
   resetSearchVisuals();
 };
 
+document.getElementById('btnCompare').onclick = () => runCompareAll();
+
 document.getElementById('algoType').onchange = () => {
   const type = document.getElementById('algoType').value;
   document.getElementById('beamWidthWrap').style.display = type === 'beam' ? 'flex' : 'none';
+  document.getElementById('deltaWrap').style.display = type === 'adaptivebeam' ? 'flex' : 'none';
   document.getElementById('filterWrap').style.display = type === 'british' ? 'none' : 'flex';
+  updateHeuristicLabels();
   resetSearchVisuals();
 };
+
+document.getElementById('beamDelta').onchange = () => resetSearchVisuals();
 
 document.getElementById('filterChk').onchange = () => resetSearchVisuals();
 
