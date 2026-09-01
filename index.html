@@ -726,7 +726,7 @@ function renderCompareTable(results) {
       const extCls = isOptimal && r.extension === minExtAmongOptimal ? 'extBest' : '';
       const resultText = !r.success
         ? (r.cappedOut ? '한도 초과' : '실패')
-        : (r.cappedOut ? '최선(미검증)' : '성공');
+        : (r.cappedOut ? '탐색 한도 초과(근사값)' : '성공');
       rows.push(
         `<tr class="${rowCls}">` +
         `<td>${TYPE_LABELS[t]}</td>` +
