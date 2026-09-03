@@ -106,22 +106,25 @@
   #legend .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
   #legend .num { width: 26px; font-size: 11px; font-weight: 700; text-align: center; flex: none; }
   #compareWrap { padding: 16px 20px 32px; border-top: 1px solid var(--border); background: #fff; }
-  #compareCaption { font-size: 13px; color: #4b5563; margin-bottom: 10px; }
-  #compareCaption b { color: var(--text); }
-  #compareCaption .badge {
+  .compareSection { margin-top: 24px; }
+  .compareSection:first-child { margin-top: 0; }
+  .compareSectionTitle { font-size: 15px; font-weight: 700; margin-bottom: 6px; color: var(--text); }
+  .compareCaption { font-size: 13px; color: #4b5563; margin-bottom: 10px; }
+  .compareCaption b { color: var(--text); }
+  .compareCaption .badge {
     display: inline-flex; align-items: center; justify-content: center;
     width: 16px; height: 16px; border-radius: 50%; color: #fff;
     font-size: 10px; font-weight: 700; margin-right: 2px; vertical-align: middle;
   }
-  #compareTable { border-collapse: collapse; font-size: 14px; width: 100%; max-width: 860px; }
-  #compareTable th, #compareTable td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; }
-  #compareTable thead th { background: var(--panel); font-weight: 700; }
-  #compareTable td.num, #compareTable th.num { text-align: right; background-repeat: no-repeat; }
-  #compareTable tr.groupRow td { background: #f3f4f6; font-weight: 700; color: #4b5563; font-size: 12px; }
-  #compareTable tr.fail td { color: #b91c1c; }
-  #compareTable tr.warn td { color: #92400e; }
-  #compareTable td.costBest { background: #fef9c3; font-weight: 700; color: #ca8a04; }
-  #compareTable td.extBest { background: #dbeafe; font-weight: 700; color: #1d4ed8; }
+  .compareTable { border-collapse: collapse; font-size: 14px; width: 100%; max-width: 860px; }
+  .compareTable th, .compareTable td { padding: 10px 14px; border-bottom: 1px solid var(--border); text-align: left; }
+  .compareTable thead th { background: var(--panel); font-weight: 700; }
+  .compareTable td.num, .compareTable th.num { text-align: right; background-repeat: no-repeat; }
+  .compareTable tr.groupRow td { background: #f3f4f6; font-weight: 700; color: #4b5563; font-size: 12px; }
+  .compareTable tr.fail td { color: #b91c1c; }
+  .compareTable tr.warn td { color: #92400e; }
+  .compareTable td.costBest { background: #fef9c3; font-weight: 700; color: #ca8a04; }
+  .compareTable td.extBest { background: #dbeafe; font-weight: 700; color: #1d4ed8; }
 </style>
 </head>
 <body>
@@ -152,7 +155,7 @@
   <label id="deltaWrap" style="display:none">δ (tolerance)
     <input id="beamDelta" type="number" min="0" max="5" step="0.1" value="1.5" style="width:48px">
   </label>
-  <label id="filterWrap"><input id="filterChk" type="checkbox" checked> 재확장 여부</label>
+  <label id="filterWrap"><input id="filterChk" type="checkbox"> 재확장 허용</label>
   <label>속도
     <select id="speed">
       <option value="700">느림</option>
@@ -198,15 +201,23 @@
   <div id="canvasWrap">
     <svg id="svg" viewBox="0 0 1000 650" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="compareWrap" style="display:none">
-      <div id="compareCaption"></div>
-      <table id="compareTable"></table>
+      <div class="compareSection">
+        <div class="compareSectionTitle">Graph Search (재확장 안 함)</div>
+        <div id="compareCaptionGraph" class="compareCaption"></div>
+        <table id="compareTableGraph" class="compareTable"></table>
+      </div>
+      <div class="compareSection">
+        <div class="compareSectionTitle">Tree Search (재확장 허용)</div>
+        <div id="compareCaptionTree" class="compareCaption"></div>
+        <table id="compareTableTree" class="compareTable"></table>
+      </div>
     </div>
   </div>
 </div>
 
 <script>
 const W = 1000, H = 650;
-const STEP_CAP = 1000; // safety limit on search steps (prevents runaway/exhaustive searches from hanging)
+const STEP_CAP = 10000; // safety limit on node extensions (prevents runaway/exhaustive searches from hanging)
 const svg = document.getElementById('svg');
 
 function mulberry32(seed) {
@@ -423,26 +434,79 @@ function typeStatText() {
 function modeStatText() {
   const type = document.getElementById('algoType').value;
   if (type === 'british') return '전체 탐색 (필터링 없음)';
-  const filtering = document.getElementById('filterChk').checked;
+  const filtering = !document.getElementById('filterChk').checked;
   return filtering ? 'Graph Search (재확장 안 함)' : 'Tree Search (재확장 허용)';
 }
 
-function freshSearch(typeOverride) {
+// priority key for ucs/greedy/astar, computed once per item instead of on every comparison
+function computeKey(type, g, id) {
+  if (type === 'ucs') return g;
+  if (type === 'greedy') return h(id);
+  if (type === 'astar') return g + h(id);
+  return 0; // dfs/bfs never read .key
+}
+
+// binary min-heap over a plain array, ordered by each item's precomputed .key —
+// O(log n) push/pop instead of re-sorting the whole frontier every step
+function heapPush(heap, item) {
+  heap.push(item);
+  let i = heap.length - 1;
+  while (i > 0) {
+    const p = (i - 1) >> 1;
+    if (heap[p].key <= heap[i].key) break;
+    [heap[p], heap[i]] = [heap[i], heap[p]];
+    i = p;
+  }
+}
+function heapPop(heap) {
+  const top = heap[0];
+  const last = heap.pop();
+  if (heap.length > 0) {
+    heap[0] = last;
+    let i = 0;
+    const n = heap.length;
+    while (true) {
+      let smallest = i;
+      const l = 2 * i + 1, r = 2 * i + 2;
+      if (l < n && heap[l].key < heap[smallest].key) smallest = l;
+      if (r < n && heap[r].key < heap[smallest].key) smallest = r;
+      if (smallest === i) break;
+      [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+      i = smallest;
+    }
+  }
+  return top;
+}
+
+function freshSearch(typeOverride, filteringOverride, live) {
   const type = typeOverride || document.getElementById('algoType').value;
   const beamWidth = type === 'hillclimbing' ? 1 : parseInt(document.getElementById('beamWidth').value, 10);
   const delta = parseFloat(document.getElementById('beamDelta').value);
-  const filtering = document.getElementById('filterChk').checked;
+  const filtering = filteringOverride !== undefined ? filteringOverride : !document.getElementById('filterChk').checked;
   const isBritish = type === 'british';
   return {
-    type, beamWidth, delta, filtering,
-    frontier: isBritish ? [{ path: [startId], g: 0 }] : [{ id: startId, path: [startId], g: 0 }],
+    type, beamWidth, delta, filtering, live: live !== false,
+    // non-british items link to their parent item object (not a path array or a shared
+    // id-keyed map) so pushing a candidate is O(1) and reconstructing a path is safe even
+    // when the same node is pushed many times with different parents (Tree Search mode)
+    frontier: isBritish ? [{ path: [startId], g: 0 }]
+      : [{ id: startId, parent: null, g: 0, key: computeKey(type, 0, startId) }],
     extended: new Set(),
     exploredEdgeKeys: new Set(), currentEdgeKeys: new Set(),
     bestPath: null, bestCost: Infinity,
-    enqueue: 1, extension: 0, ticks: 0, stepCap: STEP_CAP,
+    enqueue: 1, extension: 0, stepCap: STEP_CAP,
     finished: false, success: false, cappedOut: false,
     path: [], cost: 0, timer: null, phase: 'search'
   };
+}
+
+// walk a non-british frontier item's parent chain back to the start (O(depth), only ever
+// called for the item actually being extended/finished, never for every pushed candidate)
+function reconstructPath(item) {
+  const ids = [];
+  let cur = item;
+  while (cur) { ids.push(cur.id); cur = cur.parent; }
+  return ids.reverse();
 }
 
 function resetSearchVisuals() {
@@ -503,32 +567,36 @@ function paintEdges() {
 }
 
 // dfs: LIFO stack. bfs: FIFO queue. ucs: pop min g(s). greedy: pop min h(s). astar: pop min g(s)+h(s).
+const PQ_TYPES = new Set(['ucs', 'greedy', 'astar']);
+
 function stepPop() {
   if (search.frontier.length === 0) { search.finished = true; search.success = false; return; }
   let current;
   if (search.type === 'dfs') current = search.frontier.pop();
   else if (search.type === 'bfs') current = search.frontier.shift();
-  else {
-    const key = f => search.type === 'ucs' ? f.g
-      : search.type === 'greedy' ? h(f.id)
-      : f.g + h(f.id); // astar: f(s) = g(s) + h(s)
-    search.frontier.sort((a, b) => key(a) - key(b));
-    current = search.frontier.shift();
-  }
+  else current = heapPop(search.frontier); // ucs/greedy/astar: min-heap by precomputed .key
   if (search.filtering && search.extended.has(current.id)) return; // skip stale, try again next tick
   search.extension++;
   search.extended.add(current.id);
-  search.currentEdgeKeys = edgeKeysAlong(current.path);
+  if (search.live) search.currentEdgeKeys = edgeKeysAlong(reconstructPath(current));
   if (nodeEls[current.id]) { nodeEls[current.id].setAttribute('class', current.id === goalId ? 'node goal' : 'node current'); }
   if (current.id === goalId) {
     search.finished = true; search.success = true;
-    search.path = current.path; search.cost = current.g;
+    search.path = reconstructPath(current); search.cost = current.g;
     return;
   }
+  const usePQ = PQ_TYPES.has(search.type);
   adj[current.id].forEach(e => {
     if (search.filtering && search.extended.has(e.to)) return;
     search.exploredEdgeKeys.add(current.id + '_' + e.to);
-    search.frontier.push({ id: e.to, path: [...current.path, e.to], g: current.g + e.cost });
+    const g = current.g + e.cost;
+    const item = { id: e.to, parent: current, g };
+    if (usePQ) {
+      item.key = computeKey(search.type, g, e.to);
+      heapPush(search.frontier, item);
+    } else {
+      search.frontier.push(item);
+    }
     search.enqueue++;
   });
 }
@@ -540,7 +608,7 @@ function stepGenerational() {
   search.frontier.forEach(f => search.extended.add(f.id));
   if (hit) {
     search.finished = true; search.success = true;
-    search.path = hit.path; search.cost = hit.g;
+    search.path = reconstructPath(hit); search.cost = hit.g;
     return;
   }
   const candidatesMap = {};
@@ -549,7 +617,7 @@ function stepGenerational() {
       if (search.filtering && search.extended.has(e.to)) return;
       const g = f.g + e.cost;
       if (!candidatesMap[e.to] || candidatesMap[e.to].g > g) {
-        candidatesMap[e.to] = { id: e.to, path: [...f.path, e.to], g };
+        candidatesMap[e.to] = { id: e.to, parent: f, g };
       }
       search.enqueue++;
     });
@@ -568,11 +636,13 @@ function stepGenerational() {
     nextFrontier = candidates.slice(0, search.beamWidth); // fixed-width beam / hill climbing
   }
   nextFrontier.forEach(c => {
-    search.exploredEdgeKeys.add(c.path[c.path.length - 2] + '_' + c.id);
+    search.exploredEdgeKeys.add(c.parent.id + '_' + c.id);
   });
   search.frontier = nextFrontier;
-  search.currentEdgeKeys = new Set();
-  nextFrontier.forEach(f => edgeKeysAlong(f.path).forEach(k => search.currentEdgeKeys.add(k)));
+  if (search.live) {
+    search.currentEdgeKeys = new Set();
+    nextFrontier.forEach(f => edgeKeysAlong(reconstructPath(f)).forEach(k => search.currentEdgeKeys.add(k)));
+  }
   if (search.frontier.length === 0) { search.finished = true; search.success = false; }
 }
 
@@ -612,8 +682,7 @@ function tick() {
   if (search.type === 'british') stepBritish();
   else if (GENERATIONAL_TYPES.has(search.type)) stepGenerational();
   else stepPop();
-  search.ticks++;
-  if (!search.finished && search.ticks > search.stepCap) {
+  if (!search.finished && search.extension > search.stepCap) {
     search.finished = true; search.cappedOut = true;
     if (search.type === 'british' && search.bestPath) {
       search.success = true; search.path = search.bestPath; search.cost = search.bestCost;
@@ -640,7 +709,7 @@ function tick() {
       }
       animatePath();
     } else if (search.cappedOut) {
-      setResultMsg('탐색 한도 초과 — "방문 노드 재확장 안 함"을 켜보세요 (순환 구조일 수 있음)', 'fail');
+      setResultMsg('탐색 한도 초과 — "재확장 허용"을 꺼보세요 (순환 구조일 수 있음)', 'fail');
     } else {
       setResultMsg('✗ 경로를 찾지 못함 (막힘 / 탐색 종료)', 'fail');
     }
@@ -667,14 +736,13 @@ const COMPARE_GROUPS = [
   { label: '번외', types: ['british', 'hillclimbing'] }
 ];
 
-function runAlgoToCompletion(type) {
-  search = freshSearch(type);
+function runAlgoToCompletion(type, filtering) {
+  search = freshSearch(type, filtering, false); // live=false: skip per-step visualization bookkeeping
   while (!search.finished) {
     if (search.type === 'british') stepBritish();
     else if (GENERATIONAL_TYPES.has(search.type)) stepGenerational();
     else stepPop();
-    search.ticks++;
-    if (!search.finished && search.ticks > search.stepCap) {
+    if (!search.finished && search.extension > search.stepCap) {
       search.finished = true; search.cappedOut = true;
       if (search.type === 'british' && search.bestPath) {
         search.success = true; search.path = search.bestPath; search.cost = search.bestCost;
@@ -695,17 +763,30 @@ function runAlgoToCompletion(type) {
 }
 
 function runCompareAll() {
-  const savedType = document.getElementById('algoType').value;
-  resetSearchVisuals(); // stop any live animation first
-  const allTypes = COMPARE_GROUPS.flatMap(g => g.types);
-  const results = Object.fromEntries(allTypes.map(t => [t, runAlgoToCompletion(t)]));
-  search = null;
-  document.getElementById('algoType').value = savedType;
-  resetSearchVisuals(); // restore a clean, unrun graph
-  renderCompareTable(results);
+  const btn = document.getElementById('btnCompare');
+  btn.disabled = true;
+  btn.textContent = '계산 중... (드물게 몇 초 걸릴 수 있어요)';
+  // defer the heavy synchronous work one tick so the browser can paint the "계산 중" state
+  // first — otherwise the tab looks frozen for however long the comparison takes
+  setTimeout(() => {
+    const savedType = document.getElementById('algoType').value;
+    resetSearchVisuals(); // stop any live animation first
+    const allTypes = COMPARE_GROUPS.flatMap(g => g.types);
+    const graphResults = Object.fromEntries(allTypes.map(t => [t, runAlgoToCompletion(t, true)]));
+    const treeResults = Object.fromEntries(allTypes.map(t => [t, runAlgoToCompletion(t, false)]));
+    search = null;
+    document.getElementById('algoType').value = savedType;
+    resetSearchVisuals(); // restore a clean, unrun graph
+    renderCompareTable(graphResults, 'compareCaptionGraph', 'compareTableGraph');
+    renderCompareTable(treeResults, 'compareCaptionTree', 'compareTableTree');
+    document.getElementById('compareWrap').style.display = 'block';
+    document.getElementById('compareWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    btn.disabled = false;
+    btn.textContent = '전체 알고리즘 비교';
+  }, 0);
 }
 
-function renderCompareTable(results) {
+function renderCompareTable(results, captionId, tableId) {
   const all = Object.values(results);
   const minCost = Math.min(...all.filter(r => r.success).map(r => r.cost));
   // "verified optimal" excludes British Museum's capped-out (not proven optimal) result,
@@ -725,8 +806,8 @@ function renderCompareTable(results) {
       const costCls = isOptimal ? 'costBest' : '';
       const extCls = isOptimal && r.extension === minExtAmongOptimal ? 'extBest' : '';
       const resultText = !r.success
-        ? (r.cappedOut ? '한도 초과' : '실패')
-        : (r.cappedOut ? '탐색 한도 초과(근사값)' : '성공');
+        ? (r.cappedOut ? '한도 초과 (경로 없음)' : '실패')
+        : (r.cappedOut ? '한도 초과 (근사값 있음)' : '성공');
       rows.push(
         `<tr class="${rowCls}">` +
         `<td>${TYPE_LABELS[t]}</td>` +
@@ -739,20 +820,15 @@ function renderCompareTable(results) {
       );
     });
   });
-  document.getElementById('compareTable').innerHTML =
+  document.getElementById(tableId).innerHTML =
     '<thead><tr><th>알고리즘</th><th>결과</th><th class="num">경로 총비용</th>' +
     '<th class="num">경로 아크 수</th><th class="num">확장 수</th><th class="num">큐에 넣은 횟수</th></tr></thead>' +
     '<tbody>' + rows.join('') + '</tbody>';
-  const filtering = document.getElementById('filterChk').checked;
-  const modeNote = filtering ? 'Graph Search (재확장 안 함)' : 'Tree Search (재확장 허용)';
-  document.getElementById('compareCaption').innerHTML =
+  document.getElementById(captionId).innerHTML =
     `<span class="badge" style="background:#16a34a">S</span>노드 ${startId} → ` +
     `<span class="badge" style="background:#dc2626">G</span>노드 ${goalId} · ` +
-    `<b>${modeNote}</b> · ` +
     `<span style="color:#eab308;font-weight:700">노랑</span> = 최소 비용 · ` +
     `<span style="color:#1d4ed8;font-weight:700">파랑</span> = 최소 확장(효율적)`;
-  document.getElementById('compareWrap').style.display = 'block';
-  document.getElementById('compareWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 document.getElementById('btnSearch').onclick = () => {
